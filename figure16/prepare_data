@@ -1,0 +1,116 @@
+#!/usr/bin/python
+import MySQLdb
+from collections import defaultdict
+from multiprocessing.managers import BaseManager, DictProxy, ListProxy
+import signal
+import multiprocessing
+import argparse
+import textwrap
+import sys
+
+
+class Formatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    pass
+
+parser = argparse.ArgumentParser(description=textwrap.dedent("""\
+        X-DB test"""),
+    formatter_class=Formatter)
+parser.add_argument('--host', nargs=1, type=str, required=True, help='host of the mysql server to check.')
+parser.add_argument('--port', nargs=1, type=int, required=True, help='port of the mysql server to check.')
+parser.add_argument('--user', nargs=1, type=str, required=True, help='user to login and run check sql.')
+parser.add_argument('--password', nargs=1, type=str, default=[''], help='password to login and run check sql.')
+parser.add_argument('--database', nargs=1, type=str, default=[''], help='database to check.')
+parser.add_argument('--parallel', nargs=1, type=int, default=[1], help='process number to run check.')
+parser.add_argument('--ds', nargs=1, type=int, default=[1], help='data size.')
+parser.add_argument('--do', nargs=1, type=int, default=[1], help='data offset.')
+parser.add_argument('--dg', nargs=1, type=int, default=[1], help='data group.')
+parser.add_argument('--begin', nargs=1, type=int, default=[1], help='data offset.')
+
+
+class ProcessPool:
+    def __init__(self, pool_type, pool_size):
+        original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, original_sigint_handler)
+        self.pool_list = []
+        for i in range(pool_type):
+            self.pool_list.append(multiprocessing.Pool(processes=pool_size))
+        self.res_list = []
+
+    def run(self, task_type, func, param):
+        self.res_list.append(self.pool_list[task_type].map_async(func, param))
+
+    def join(self):
+        try:
+            for res in self.res_list:
+                res.get(99999999)
+        except KeyboardInterrupt:
+            for pool in self.pool_list:
+                pool.terminate()
+
+    def close(self):
+        for pool in self.pool_list:
+            pool.close()
+
+        for pool in self.pool_list:
+            pool.join()
+
+
+class SQLRecorder:
+    def __init__(self, cursor):
+        self.cursor = cursor
+        self.executed_sql = []
+
+    def execute(self, sql):
+        self.cursor.execute(sql)
+        self.executed_sql.append(sql)
+        return self.cursor.fetchall()
+
+    def reply(self):
+        for sql in self.executed_sql:
+            print sql
+
+
+def insert(check_args):
+    thread_id, data_size, data_offset, data_group, begin = check_args
+    db = MySQLdb.connect(host, user, password, database, port=port)
+    cursor = db.cursor()
+
+    sql_str = 'INSERT INTO sbtest%s VALUES' % thread_id
+    value_list = []
+    for i in range(begin, begin + data_size):
+        if i % data_group == data_offset:
+            value_list.append('({pk}, {sk}, \'81143976601-89748832573-85311105937-20198082336-77097101543-08698054788-62929012242-15076309316-46524785732-22038804946\', \'33182900114-48852060423-74338181837-73421788241-63963324738\')'.format(pk=i, sk=i))
+        if i % 1000 == 999 :
+            value_str = ','.join(value_list)
+            value_list = []
+            cursor.execute(sql_str + value_str)
+            cursor.execute('commit;')
+
+    cursor.close()
+    db.close()
+
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+    print args
+    host = args.host[0]
+    port = args.port[0]
+    user = args.user[0]
+    password = args.password[0]
+    parallel = args.parallel[0]
+    database = args.database[0]
+    data_size = args.ds[0]
+    data_offset = args.do[0]
+    data_group = args.dg[0]
+    begin = args.begin[0]
+
+    if parallel == 1:
+        insert((1, data_size, data_offset, data_group, begin))
+    else:
+        pool = ProcessPool(1, parallel)
+        for i in range(1, parallel + 1):
+            pool.run(0, insert, [(i, data_size, data_offset, data_group)])
+
+        pool.join()
+        pool.close()
+
