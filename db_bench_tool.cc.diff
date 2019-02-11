@@ -1,0 +1,99 @@
+diff --git a/tools/db_bench_tool.cc b/tools/db_bench_tool.cc
+index e3560d6..7e8685c 100644
+--- a/tools/db_bench_tool.cc
++++ b/tools/db_bench_tool.cc
+@@ -3716,7 +3716,7 @@ void VerifyDBFromDB(std::string& truth_db_name) {
+   class KeyGenerator {
+    public:
+     KeyGenerator(Random64* rand, WriteMode mode, uint64_t num,
+-                 uint64_t /*num_per_set*/ = 64 * 1024)
++                 uint64_t /*num_per_set*/ = 64 * 1024, uint64_t start = 0)
+         : rand_(rand), mode_(mode), num_(num), next_(0) {
+       if (mode_ == UNIQUE_RANDOM) {
+         // NOTE: if memory consumption of this approach becomes a concern,
+@@ -3730,6 +3730,8 @@ void VerifyDBFromDB(std::string& truth_db_name) {
+         std::shuffle(
+             values_.begin(), values_.end(),
+             std::default_random_engine(static_cast<unsigned int>(FLAGS_seed)));
++      } else if (mode_ == SEQUENTIAL) {
++        next_ = start;
+       }
+     }
+ 
+@@ -3796,7 +3798,8 @@ void VerifyDBFromDB(std::string& truth_db_name) {
+     for (size_t i = 0; i < num_key_gens; i++) {
+       key_gens[i].reset(new KeyGenerator(&(thread->rand), write_mode,
+                                          num_ + max_num_range_tombstones_,
+-                                         ops_per_stage));
++                                         ops_per_stage,
++                                         num_ * (thread->tid + 0)));
+     }
+ 
+     if (num_ != FLAGS_num) {
+@@ -4273,27 +4276,27 @@ void VerifyDBFromDB(std::string& truth_db_name) {
+     ReadOptions options(FLAGS_verify_checksum, true);
+     options.tailing = FLAGS_use_tailing_iterator;
+ 
+-    Iterator* iter = db->NewIterator(options);
+-    int64_t i = 0;
+-    int64_t bytes = 0;
+-    for (iter->SeekToFirst(); i < reads_ && iter->Valid(); iter->Next()) {
+-      bytes += iter->key().size() + iter->value().size();
+-      thread->stats.FinishedOps(nullptr, db, 1, kRead);
+-      ++i;
+-
+-      if (thread->shared->read_rate_limiter.get() != nullptr &&
+-          i % 1024 == 1023) {
+-        thread->shared->read_rate_limiter->Request(1024, Env::IO_HIGH,
+-                                                   nullptr /* stats */,
+-                                                   RateLimiter::OpType::kRead);
++    Duration duration(FLAGS_duration, 1000000 * reads_);
++    DBWithColumnFamilies* db_with_cfh = SelectDBWithCfh(thread->tid);
++
++    while (!duration.Done(reads_)) {
++      Iterator* iter = db->NewIterator(options, db_with_cfh->GetCfh(thread->tid));
++      int64_t i = 0;
++      int64_t bytes = 0;
++      for (iter->SeekToFirst(); i < reads_ && iter->Valid(); iter->Next()) {
++        bytes += iter->key().size() + iter->value().size();
++        ++i;
++
++        if (thread->shared->read_rate_limiter.get() != nullptr &&
++            i % 1024 == 1023) {
++          thread->shared->read_rate_limiter->Request(1024, Env::IO_HIGH,
++                                                     nullptr /* stats */);
++        }
+       }
+-    }
++      thread->stats.FinishedOps(nullptr, db, 1, kRead);
+ 
+-    delete iter;
+-    thread->stats.AddBytes(bytes);
+-    if (FLAGS_perf_level > rocksdb::PerfLevel::kDisable) {
+-      thread->stats.AddMessage(std::string("PERF_CONTEXT:\n") +
+-                               get_perf_context()->ToString());
++      delete iter;
++      thread->stats.AddBytes(bytes);
+     }
+   }
+ 
+@@ -5616,10 +5619,17 @@ void VerifyDBFromDB(std::string& truth_db_name) {
+   }
+ 
+   void Compact(ThreadState* thread) {
+-    DB* db = SelectDB(thread);
+     CompactRangeOptions cro;
+     cro.bottommost_level_compaction = BottommostLevelCompaction::kForce;
+-    db->CompactRange(cro, nullptr, nullptr);
++
++    DB* db = SelectDB(thread);
++    DBWithColumnFamilies* db_with_cfh = SelectDBWithCfh(thread);
++    if (thread->tid == 0) {
++      for (int i = 0; i < FLAGS_num_column_families; ++i) {
++        db->Flush(FlushOptions(), db_with_cfh->GetCfh(i));
++        db->CompactRange(cro, db_with_cfh->GetCfh(i), nullptr, nullptr);
++      }
++    }
+   }
+ 
+   void CompactAll() {
