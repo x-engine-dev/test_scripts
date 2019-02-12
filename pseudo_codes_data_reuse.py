@@ -1,3 +1,5 @@
+# This is the pseudo codes for data reuse in X-Engine. 
+
 def reuse_object(meta, writer, iter):
   if (iter.type() == EXTENT) :
 	meta.add(iter.current_extent().range(), iter.current_extent().id())
