@@ -16,10 +16,10 @@ def copy_data_stream(meta, writer, iter):
 
 writer = create_new_writer() // new writer for store merge result.
 meta = create_new_meta_data() 
-// assume we have two data stream to merge.
-// iterator.key() return first key of current iterate Object(e.g. Extent, DataBlock)
-// iterator.last_key() return last key of current iterate Object
-// key() == last_key() while in middle of DataBlock.
+# assume we have two data stream to merge.
+# iterator.key() return first key of current iterate Object(e.g. Extent, DataBlock)
+# iterator.last_key() return last key of current iterate Object
+# key() == last_key() while in middle of DataBlock.
 l1_iter = level1.create_iterator(compact_range)
 l2_iter = level2.create_iterator(compact_range)
 
@@ -44,6 +44,6 @@ while l1_iter.has_data() and l1_iter.has_data():
 	writer.add_row(min_iter.key(), min_iter.value())
   min_iter.next()
 
-// add remain data in l1 & l2 iterator
+# add remain data in l1 & l2 iterator
 copy_data_stream(meta, writer, l1_iter)
 copy_data_stream(meta, writer, l2_iter)
